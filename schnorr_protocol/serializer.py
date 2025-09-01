@@ -1,8 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from typing import Protocol
-
-from attrs import field
 
 from .errors import ErrorType
 from .messages import MessageType
@@ -18,7 +16,7 @@ class MessageKind(Protocol):
 @dataclass
 class BaseMessage:
     msg_type: MessageKind
-    payload: dict = field(default=dict)
+    payload: dict = field(default_factory=dict)
 
     def validate_message(self, required_fields: dict):
         if not isinstance(self.payload, dict):
@@ -30,7 +28,7 @@ class BaseMessage:
                 raise ValidationError(f"Campo mancante: {field}")
             if not isinstance(value, expected_type):
                 raise ValidationError(
-                    f"Il campo {field} deve essere {expected_type.__name__}"
+                    f"Il campo {field} deve essere {expected_type.__name__}, ricevuto {type(value)}"
                 )
 
     def __str__(self):

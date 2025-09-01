@@ -68,7 +68,7 @@ def safe_close(ctx: ConnContext):
 def handle_handshake(ctx: ConnContext, schnorr_verifier: SchnorrVerifier):
     ctx.send(
         Message(
-            msg_type=MessageType.HANDSHAKE_RES, payload={"group_id": schnorr_verifier.crypto_group}
+            msg_type=MessageType.HANDSHAKE_RES, payload={"group_id": schnorr_verifier.crypto_group.group_id}
         )
     )
 
@@ -146,7 +146,7 @@ def handle_auth_request(ctx: ConnContext, msg: Message, schnorr_verifier: Schnor
     user = User.find_user_by_id(username)
 
     if not user:
-        ctx.send(Message(msg_type=MessageType.AUTH_REJECTED))
+        ctx.send(Message(msg_type=MessageType.AUTH_REJECTED, payload={"challenge": ""}))
         if DEBUG:
             logger.debug(f"[SERVER] Autenticazione fallita: username '{username}' non trovato")
         return
@@ -201,7 +201,7 @@ def handle_auth_response(ctx: ConnContext, msg: Message, schnorr_verifier: Schno
     authenticated = False
     matched_device = None
     for device in devices:
-
+        schnorr_verifier.public_key = int(device["pk"], 16)
         if schnorr_verifier.check(res):
             authenticated = True
             matched_device = device
@@ -342,19 +342,19 @@ def handle_devices_request(ctx: ConnContext):
         return
 
     user = ctx.session.user
-    devices = user.devices
+    
+    devices = user.get_user_devices()
 
-    # Rimuovi eventuali chiavi sensibili prima di inviare
     devices_info = [
         {
             "device_name": device["device_name"],
-            "main_device": device.get("main_device", False),
+            "main_device": device.get("main_device"),
             "logged": device.get("logged"),
         }
         for device in devices
     ]
 
-    ctx.send(Message(msg_type=MessageType.DEVICES_RESPONSE, payload={"devices": devices_info}))
+    ctx.send(Message(msg_type=MessageType.DEVICE_RES, payload={"devices": devices_info}))
     if DEBUG:
         logger.debug(f"[SERVER] Lista dispositivi inviata a {user._id}")
 
@@ -393,7 +393,7 @@ def client_handler(ctx: ConnContext, schnorr_verifier: SchnorrVerifier):
             if msg_type == MessageType.HANDSHAKE_REQ:
                 handle_handshake(ctx, schnorr_verifier)
             elif msg_type == MessageType.REGISTRATION_REQ:
-                handle_registration(ctx, msg)
+                handle_registration(ctx, msg, schnorr_verifier)
             elif msg_type == MessageType.AUTH_COMMITMENT:
                 handle_auth_request(ctx, msg, schnorr_verifier)
             elif msg_type == MessageType.AUTH_RESPONSE:
@@ -403,7 +403,7 @@ def client_handler(ctx: ConnContext, schnorr_verifier: SchnorrVerifier):
             elif msg_type == MessageType.ASSOC_RECV_TOKEN:
                 handle_assoc_confirm(ctx, msg)
             elif msg_type == MessageType.DEVICE_REQ:
-                handle_devices_request(ctx, msg)
+                handle_devices_request(ctx)
             elif msg_type == MessageType.LOGOUT:
                 handle_logout(ctx)
             else:

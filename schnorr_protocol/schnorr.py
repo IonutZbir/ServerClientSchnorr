@@ -1,6 +1,7 @@
 import random
 
 from .groups import GroupType, Rfc3526
+# from groups import GroupType, Rfc3526
 
 
 class SchnorrProver:
@@ -131,4 +132,4 @@ if __name__ == "__main__":
     print(result)
 
 
-    print(prover.crypto_group)
+    print(type(prover.crypto_group.group_id))

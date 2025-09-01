@@ -1,5 +1,4 @@
 import argparse
-import qrcode
 import socket
 import sys
 from pathlib import Path
@@ -11,11 +10,9 @@ sys.path.append(str(project_root))
 from schnorr_protocol import *
 from common.logger import Logger
 
-from utils.utils import get_device_name
+from utils.utils import get_device_name, create_qr_code, Device
 from utils.key_manager import KeyManager
 from utils.client_connection import ClientConnection
-
-# --- COSTANTI ---
 
 DEBUG = False
 
@@ -27,6 +24,12 @@ class ClientApp:
         self.client_conn = client_conn
         self.schnorr_prover = None
 
+        if not self._handshake():
+            sys.exit(1)
+
+        if DEBUG:
+            logger.debug("[CLIENT] Handshake andato a buon fine...")
+
     def _send(self, message: Message | Error) -> bool:
         try:
             self.client_conn.send(message)
@@ -35,8 +38,13 @@ class ClientApp:
             return False
         return True
 
-    def handshake(self) -> bool:
-        if not self._send(Message(msg_type=MessageType.HANDSHAKE_REQ)):
+    def _handshake(self) -> bool:
+        handshake_msg = Message(msg_type=MessageType.HANDSHAKE_REQ)
+        
+        if DEBUG:
+            logger.debug(f"[CLIENT] Inviata richiesta di handshake: {handshake_msg.to_log()}")
+        
+        if not self._send(handshake_msg):
             return False
 
         if DEBUG:
@@ -90,7 +98,7 @@ class ClientApp:
             return False
 
         if DEBUG:
-            logger.info(f"[CLIENT] Inviata richiesta di registrazione: {req_msg.to_log()}")
+            logger.debug(f"[CLIENT] Inviata richiesta di registrazione: {req_msg.to_log()}")
 
         response = wait_for_response(self.client_conn, {MessageType.REGISTERED})
 
@@ -103,7 +111,13 @@ class ClientApp:
 
     def auth(self) -> bool:
         username = input("[INPUT] Inserisci uno username per l'autenticazione: ").strip()
-        self.schnorr_prover.alpha = KeyManager.load_private_key(username)
+        try:
+            self.schnorr_prover.alpha = KeyManager.load_private_key(username)
+        except Exception as e:
+            if DEBUG:
+                logger.warning(f"[CLIENT] Errore nel caricameto della chiave {e}")
+            logger.info("[CLIENT] È richiesto registrarsi prima!")
+            return False
 
         public_key_temp = hex(self.schnorr_prover.public_key_temp)
 
@@ -119,9 +133,13 @@ class ClientApp:
             logger.info(f"[CLIENT] Inviata richiesta di autenticazione: {auth_req_msg.to_log()}")
 
         response = wait_for_response(
-            self.client_conn, {MessageType.AUTH_CHALLENGE}, {"challenge": str}
+            self.client_conn, {MessageType.AUTH_CHALLENGE,  MessageType.AUTH_REJECTED}, {"challenge": str}
         )
         if response is None:
+            return False
+
+        if response.msg_type == MessageType.AUTH_REJECTED:
+            logger.info(f"[CLIENT] {MessageType.AUTH_REJECTED.message()}!")
             return False
 
         challenge = response.payload.get("challenge")
@@ -214,6 +232,26 @@ class ClientApp:
         logger.info("[CLIENT] Abbinamento confermato con successo.")
         return True
 
+    def show_devices(self) -> bool:
+        msg_req = Message(msg_type=MessageType.DEVICE_REQ)
+        
+        if not self._send(msg_req):
+            return False
+        
+        response = wait_for_response(self.client_conn, {MessageType.DEVICE_RES}, {"devices": list})
+        
+        if response is None:
+            return False
+        
+        devices = response.payload["devices"]
+        
+        for i, dev in enumerate(devices):
+            device = Device(device_name=dev["device_name"], main_device=dev["main_device"], logged=dev["logged"])
+            logger.info(f"Dispositivi associati:\n{'-'*20}\n{i+1}. {device}\n{'-'*20}")
+        
+        return True        
+        
+
     def log_out(self) -> bool:
 
         if not self._send(Message(msg_type=MessageType.LOGOUT)):
@@ -250,38 +288,16 @@ def wait_for_response(
                     return None
             return msg
         elif isinstance(msg, Error):
-            err = ErrorType.from_code(msg.msg_type)
+            err = ErrorType.from_code(msg.msg_type.code)
             logger.warning(f"[CLIENT] Errore: {err.message()}")
         else:
             logger.warning(f"Tipo di messaggio atteso: {expected_types}, ricevuto {msg.msg_type}.")
         return None
 
-        # if msg.get("type_code") in expected_types:
-        #     return msg
-        # elif msg.get("type_code") == MessageType.ERROR.code:
-        #     err = ErrorType.from_code(msg["error_code"])
-        #     logger.warning(f"[CLIENT] Errore: {err.message()}")
-        #     return None
-        # else:
-
-
-def create_qr_code(token: str) -> None:
-    """Crea e mostra un QR code dal token dato."""
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(token)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    img.show()
-
 
 def not_logged_menu() -> str:
     menu = (
-        "\n[CLIENT] Seleziona un'opzione:\n"
+        "\n[MENÙ] Seleziona un'opzione:\n"
         "  [R] Registrati\n"
         "  [A] Accedi\n"
         "  [D] Richiedi abbinamento dispositivo\n"
@@ -292,9 +308,10 @@ def not_logged_menu() -> str:
 
 def logged_menu() -> str:
     menu = (
-        "\n[CLIENT] Seleziona un'opzione:\n"
-        "  [L] Log out\n"
+        "\n[MENÙ] Seleziona un'opzione:\n"
         "  [C] Conferma abbinamento dispositivo\n"
+        "  [D] Visualizza dispositivi associati\n"
+        "  [L] Log out\n"
         "  [Q] Esci\n"
     )
     return menu
@@ -345,12 +362,6 @@ def main():
         client_conn = ClientConnection(sock)
         app = ClientApp(client_conn)
 
-        if not app.handshake():
-            sys.exit(1)
-
-        if DEBUG:
-            logger.debug("[CLIENT] Handshake andato a buon fine...")
-
         logged_in = False
 
         # Azioni per il menu NON loggato
@@ -358,14 +369,15 @@ def main():
             "R": app.register,
             "A": app.auth,
             "D": app.assoc,
-            "Q": lambda: sys.exit("[CLIENT] Uscita dal client."),
+            "Q": lambda: sys.exit(logger.info("[CLIENT] Uscita dal client.")),
         }
 
         # Azioni per il menu loggato
         actions_logged = {
-            "L": app.log_out,
+            "D": app.show_devices,
             "C": app.confirm_assoc,
-            "Q": lambda: sys.exit("[CLIENT] Uscita dal client."),
+            "L": app.log_out,
+            "Q": lambda: sys.exit(logger.info("[CLIENT] Uscita dal client.")),
         }
 
         while True:

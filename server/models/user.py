@@ -74,3 +74,8 @@ class User:
     def find_user_by_id(cls, id: str) -> "User | None":
         data = cls.collection.find_one({"_id": id})
         return cls.from_dict(data) if data else None
+
+    
+    def get_user_devices(self):
+        user_data = self.collection.find_one({"_id": self._id}, {"devices": 1, "_id": 0})
+        return user_data.get("devices", []) if user_data else []
