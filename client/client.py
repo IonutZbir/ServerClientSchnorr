@@ -279,7 +279,7 @@ def wait_for_response(
             logger.warning("[CLIENT] Connessione chiusa o messaggio vuoto.")
             return None
 
-        if msg.msg_type in expected_types and isinstance(msg, Message):
+        if isinstance(msg, Message) and msg.msg_type in expected_types:
             if required_fields is not None:
                 try:
                     msg.validate_message(required_fields)
@@ -292,7 +292,6 @@ def wait_for_response(
             logger.warning(f"[CLIENT] Errore: {err.message()}")
         else:
             logger.warning(f"Tipo di messaggio atteso: {expected_types}, ricevuto {msg.msg_type}.")
-        return None
 
 
 def not_logged_menu() -> str:
