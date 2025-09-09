@@ -1,4 +1,5 @@
-import socket
+import asyncio
+
 import datetime
 
 from typing import Optional, Any, Dict
@@ -7,13 +8,13 @@ from schnorr_protocol import *
 
 from dataclasses import dataclass
 
-from models.user import User
+from models import User
 
 
 @dataclass
 class SessionData:
     user: User = None
-    logged_device: Optional[str] = None
+    logged_pk = None
     login_time: datetime.datetime = None
     temp_pk: Optional[int] = None
     challenge: Optional[int] = None
@@ -25,18 +26,20 @@ class SessionData:
 class ConnContext:
     MESSAGE_LENGTH = 4096
 
-    def __init__(self, conn: socket.socket, addr: str):
-        self.conn = conn
-        self.addr = addr
+    def __init__(self, reader: asyncio.StreamReader , writer: asyncio.StreamWriter):
+        self.reader = reader
+        self.writer = writer
+        self.addr = self.writer.get_extra_info("peername")
         self.session = SessionData()
         self._closed = False
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Chiude la connessione e pulisce i dati di sessione."""
         if self._closed:
             return
         try:
-            self.conn.close()
+            self.writer.close()
+            await self.writer.wait_closed()
             self.clear_session()
             self._closed = True
         except Exception as e:
@@ -58,27 +61,28 @@ class ConnContext:
     def is_session_empty(self) -> bool:
         return not self.session.is_authenticated()
 
-    def send(self, message: Message | Error) -> bool: # TODO: rilanciare l'eccezione
+    async def send(self, message: Message | Error) -> bool: # TODO: rilanciare l'eccezione
         """Invia un messaggio JSON al client."""
         if self._closed:
             print(f"[SERVER] Tentativo di invio a {self.addr}, ma connessione già chiusa.")
             return False
         try:
-            self.conn.sendall(encode_message(message))
+            self.writer.write(encode_message(message))
+            await self.writer.drain()
             return True
         except (BrokenPipeError, ConnectionResetError):
             print(f"[SERVER] Errore: connessione chiusa dal client {self.addr} durante l'invio")
             self.close()
             return False
 
-    def receive(self) -> Message | Error | None:
+    async def receive(self) -> Message | Error | None:
         """Riceve un messaggio JSON dal client."""
         if self._closed:
             return None
         try:
-            data = self.conn.recv(self.MESSAGE_LENGTH)
+            data = await self.reader.read(self.MESSAGE_LENGTH)
             if not data:
-                self.close()
+                await self.close()
                 return None
             return decode_message(data.decode())
         except ConnectionResetError:

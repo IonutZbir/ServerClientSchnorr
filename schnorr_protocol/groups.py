@@ -9,6 +9,14 @@ class GroupType(Enum):
     MODP_3072 = "modp-3072"
     MODP_4096 = "modp-4096"
 
+    @classmethod
+    def get_all_groups_str(cls):
+        return [cls.MODP_1536.group_id, cls.MODP_2048.group_id, cls.MODP_3072.group_id, cls.MODP_4096.group_id]
+    
+    @classmethod
+    def get_all_groups_obj(cls):
+        return [cls.MODP_1536, cls.MODP_2048, cls.MODP_3072, cls.MODP_4096]
+    
     def __init__(self, group_id):
         self.group_id = group_id
 
@@ -24,6 +32,7 @@ class Rfc3526:
             base_path = os.path.dirname(__file__)
             self._filename = os.path.join(base_path, "rfc3526_groups.json")
         self._groups = self._load_groups()
+        
         self._p = self._groups[self._group_id]["p"]
         self._g = self._groups[self._group_id]["g"]
         self._q = (self._p - 1) // 2

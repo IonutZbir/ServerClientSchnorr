@@ -45,14 +45,14 @@ class Logger:
             colorize=True
         )
 
+    def error(self, message: str):
+        self.logger.opt(depth=1).error(message)
+
     def debug(self, message: str):
-        self.logger.debug(message)
+        self.logger.opt(depth=1).debug(message)
 
     def info(self, message: str):
-        self.logger.info(message)
-
-    def error(self, message: str):
-        self.logger.error(message)
+        self.logger.opt(depth=1).info(message)
 
     def warning(self, message: str):
-        self.logger.warning(message)
+        self.logger.opt(depth=1).warning(message)

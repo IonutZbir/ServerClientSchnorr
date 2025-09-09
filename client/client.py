@@ -2,6 +2,11 @@ import argparse
 import socket
 import sys
 from pathlib import Path
+import hashlib
+
+import getpass
+
+import cryptography
 
 # Ensure project root is in sys.path for internal imports
 project_root = Path(__file__).resolve().parent.parent
@@ -18,11 +23,44 @@ DEBUG = False
 
 logger = Logger()
 
+class User:
+    def __init__(self):
+        self._username = None
+        self._logged = False
+        self._password = None
+
+    @property
+    def username(self):
+        return self._username
+
+    @username.setter
+    def username(self, value):
+        self._username = value
+
+    @property
+    def logged(self):
+        return self._logged
+
+    @logged.setter
+    def logged(self, value):
+        self._logged = value
+    
+    @property
+    def password(self):
+        return self._password
+
+    @password.setter
+    def password(self, value):
+        self._password = value
 
 class ClientApp:
     def __init__(self, client_conn: ClientConnection):
         self.client_conn = client_conn
         self.schnorr_prover = None
+
+        self.user = User()
+
+        self.password = None
 
         if not self._handshake():
             sys.exit(1)
@@ -42,7 +80,7 @@ class ClientApp:
         handshake_msg = Message(msg_type=MessageType.HANDSHAKE_REQ)
         
         if DEBUG:
-            logger.debug(f"[CLIENT] Inviata richiesta di handshake: {handshake_msg.to_log()}")
+            logger.debug(f"[CLIENT] Inviata richiesta di handshake")
         
         if not self._send(handshake_msg):
             return False
@@ -51,35 +89,40 @@ class ClientApp:
             logger.debug("[CLIENT] Handshake fase 1 - Request")
 
         response = wait_for_response(
-            self.client_conn, {MessageType.HANDSHAKE_RES}, {"group_id": str}
+            self.client_conn, {MessageType.HANDSHAKE_RES}, {"crypto_groups": list}
         )
 
         if response is None:
             return False
 
+        crypto_groups = set(response.payload["crypto_groups"])
+
+        my_crypto_groups = GroupType.get_all_groups_obj()
+        
+        group_id = None
+        for mcg in my_crypto_groups:
+            if mcg.group_id in crypto_groups:
+                group_id = mcg
+                break
+
         if DEBUG:
             logger.debug("[CLIENT] Handshake fase 2 - Response")
-
-        group_id = GroupType(response.payload.get("group_id"))
-        logger.info(f"[CLIENT] Gruppo selezionato dal server: {group_id}")
-
-        try:
-            self.schnorr_prover = SchnorrProver(group_id)
-        except Exception as e:
+            
+        if group_id is None:
             if not self._send(Message(msg_type=MessageType.HANDSHAKE_NOK)):
                 return False
             if DEBUG:
                 logger.debug("[CLIENT] Handshake fase 3 - Handshake NOK")
-            logger.warning(f"[CLIENT] Errore durante l'inizializzazione del prover: {e}")
             return False
 
-        if not self._send(Message(msg_type=MessageType.HANDSHAKE_OK)):
+        self.schnorr_prover = SchnorrProver(group_id)
+
+        if not self._send(Message(msg_type=MessageType.HANDSHAKE_OK, payload={"group_id": group_id.group_id})):
             return False
 
         return True
 
-    def register(self) -> bool:
-        username = input("[INPUT] Inserisci uno username per la registrazione: ").strip()
+    def _register(self, username: str) -> bool:
 
         self.schnorr_prover.gen_keys()  # generate private key and public key
 
@@ -106,31 +149,44 @@ class ClientApp:
             return False
 
         logger.info(f"[CLIENT] {MessageType.REGISTERED.message()}")
-        KeyManager.save_private_key(username, self.schnorr_prover.alpha)
+        KeyManager.save_private_key(username, self.schnorr_prover.alpha, self.password)
+        self.user.username = username
+        self.user.password = self.password
+        self.user.logged = True
         return True
 
     def auth(self) -> bool:
+        
+        # 1. L'utente inserisce l'username per l'autenticazione
+        # 2. Se in locale non viene trovata la chiave allora manda la richiesta di registrazione
+        # 3. Se in locale viene trovata la chiave allora manda al richiesta di autenticazione
+        
         username = input("[INPUT] Inserisci uno username per l'autenticazione: ").strip()
         try:
-            self.schnorr_prover.alpha = KeyManager.load_private_key(username)
-        except Exception as e:
+            self.schnorr_prover.alpha = KeyManager.load_private_key(username, self.password)
+        except FileNotFoundError:
             if DEBUG:
-                logger.warning(f"[CLIENT] Errore nel caricameto della chiave {e}")
-            logger.info("[CLIENT] È richiesto registrarsi prima!")
-            return False
-
+                logger.debug("[CLIENT] Chiave privata dell'utente non trovata, procedo con la registrazione...")
+            return self._register(username)
+        except cryptography.exceptions.InvalidTag:
+            logger.warning("[CLIENT] Password errata!!")
+            return
+        # L'utente è registrato
+                
+        pk_hash = hashlib.sha256(str(self.schnorr_prover.public_key).encode()).hexdigest()
+        
         public_key_temp = hex(self.schnorr_prover.public_key_temp)
 
         auth_req_msg = Message(
             msg_type=MessageType.AUTH_COMMITMENT,
-            payload={"public_key_temp": public_key_temp, "username": username},
+            payload={"public_key_temp": public_key_temp, "username": username, "pk_hash": pk_hash},
         )
 
         if not self._send(auth_req_msg):
             return False
 
         if DEBUG:
-            logger.info(f"[CLIENT] Inviata richiesta di autenticazione: {auth_req_msg.to_log()}")
+            logger.debug(f"[CLIENT] Inviata richiesta di autenticazione: {auth_req_msg.to_log()}")
 
         response = wait_for_response(
             self.client_conn, {MessageType.AUTH_CHALLENGE,  MessageType.AUTH_REJECTED}, {"challenge": str}
@@ -161,6 +217,9 @@ class ClientApp:
             return False
 
         if response.msg_type == MessageType.AUTH_ACCEPTED:
+            self.user.username = username
+            self.user.password = self.password
+            self.user.logged = True
             logger.info(f"[CLIENT] {MessageType.AUTH_ACCEPTED.message()}!")
             logger.info(f"[CLIENT] Benvenuto {response.payload.get("username")}!")
             return True
@@ -252,6 +311,19 @@ class ClientApp:
         return True        
         
 
+    def change_password(self, new_password: str) -> bool:
+        try:
+            KeyManager.change_password(self.user.username, self.user.password, new_password)
+        except Exception as e:
+            if DEBUG:
+                logger.debug(f"[CLIENT] Errore nel cambiamento della password: {e}")
+            logger.info("[CLIENT] Non è stato possibile cambiare la password")
+            return False
+        self.password = new_password
+        self.user.password = new_password
+        logger.info("[CLIENT] Password cambiata con successo!")
+        return True
+
     def log_out(self) -> bool:
 
         if not self._send(Message(msg_type=MessageType.LOGOUT)):
@@ -262,9 +334,10 @@ class ClientApp:
         if response is None:
             return False
 
+        self.user = User()
+        
         logger.info("[CLIENT] Logout effettuato con successo.")
         return True
-
 
 def wait_for_response(
     client: ClientConnection, expected_types: set[MessageType], required_fields: dict = None
@@ -297,7 +370,7 @@ def wait_for_response(
 def not_logged_menu() -> str:
     menu = (
         "\n[MENÙ] Seleziona un'opzione:\n"
-        "  [R] Registrati\n"
+        "  [I] Imposta una password\n"
         "  [A] Accedi\n"
         "  [D] Richiedi abbinamento dispositivo\n"
         "  [Q] Esci\n"
@@ -310,6 +383,7 @@ def logged_menu() -> str:
         "\n[MENÙ] Seleziona un'opzione:\n"
         "  [C] Conferma abbinamento dispositivo\n"
         "  [D] Visualizza dispositivi associati\n"
+        "  [P] Cambia password\n"
         "  [L] Log out\n"
         "  [Q] Esci\n"
     )
@@ -364,8 +438,12 @@ def main():
         logged_in = False
 
         # Azioni per il menu NON loggato
+        def set_password():
+            app.password = getpass.getpass("")
+
+
         actions_not_logged = {
-            "R": app.register,
+            "I": set_password,
             "A": app.auth,
             "D": app.assoc,
             "Q": lambda: sys.exit(logger.info("[CLIENT] Uscita dal client.")),
@@ -375,6 +453,7 @@ def main():
         actions_logged = {
             "D": app.show_devices,
             "C": app.confirm_assoc,
+            "P": lambda: app.change_password(getpass.getpass("")),
             "L": app.log_out,
             "Q": lambda: sys.exit(logger.info("[CLIENT] Uscita dal client.")),
         }

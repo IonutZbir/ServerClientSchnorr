@@ -1,3 +1,7 @@
 qrcode
 pymongo
 loguru
+beanie
+motor
+pydantic
+cryptography

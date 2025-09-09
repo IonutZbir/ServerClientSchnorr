@@ -7,7 +7,7 @@ def get_linux_device_model():
     try:
         with open("/sys/devices/virtual/dmi/id/product_name", "r") as f:
             model = f.readline().strip()
-        with open("/sys/devices/virtual/dmi/id/chassis_version", "r") as f:
+        with open("/sys/devices/virtual/dmi/id/sys_vendor", "r") as f:
             manufacturer = f.readline().strip()
         return manufacturer, model
     except Exception as e:
@@ -17,8 +17,12 @@ def get_linux_device_model():
 def get_device_name() -> str:
     manuf, model = get_linux_device_model()
     dis = distro.name(pretty=True)
-    return f"{manuf} {model} - {dis} - {platform.machine()}"
-
+    out = f"{manuf} {model} - {dis} - {platform.machine()}"
+    
+    if model == "System Product Name":
+        out = f"{manuf} - {dis} - {platform.machine()}"
+    
+    return out
 
 def create_qr_code(token: str) -> None:
     """Crea e mostra un QR code dal token dato."""

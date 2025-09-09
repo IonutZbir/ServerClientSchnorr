@@ -29,6 +29,8 @@ class SchnorrProver:
     
     @property
     def public_key(self) -> int:
+        if self._public_key is None:
+            self._public_key = pow(self._g, self._alpha, self._p)
         return self._public_key
 
     @property
