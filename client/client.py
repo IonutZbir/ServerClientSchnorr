@@ -148,7 +148,9 @@ class ClientApp:
         if response is None:
             return False
 
-        logger.info(f"[CLIENT] {MessageType.REGISTERED.message()}")
+        logger.info(f"[CLIENT] {MessageType.AUTH_ACCEPTED.message()}")
+        logger.info(f"[CLIENT] Benvenuto {username}!")
+        
         KeyManager.save_private_key(username, self.schnorr_prover.alpha, self.password)
         self.user.username = username
         self.user.password = self.password
@@ -163,7 +165,7 @@ class ClientApp:
         
         username = input("[INPUT] Inserisci uno username per l'autenticazione: ").strip()
         try:
-            self.schnorr_prover.alpha = KeyManager.load_private_key(username, self.password)
+            self.schnorr_prover.alpha = KeyManager.load_private_key(username, self.password)    
         except FileNotFoundError:
             if DEBUG:
                 logger.debug("[CLIENT] Chiave privata dell'utente non trovata, procedo con la registrazione...")
@@ -475,6 +477,8 @@ def main():
                 action = actions_logged.get(ans)
                 if action:
                     success = action()
+                    if not success:
+                        logged_in = False
                     if ans == "L" and success:
                         logged_in = False
                 else:

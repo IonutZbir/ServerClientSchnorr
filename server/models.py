@@ -1,7 +1,6 @@
+from typing import List
 from beanie import Document, Link
-from caldav import List
-
-import datetime
+from datetime import datetime
 
 class PublicKey(Document):
     pk: str
@@ -12,7 +11,7 @@ class PublicKey(Document):
 class User(Document):
     username: str
     public_keys: List[Link[PublicKey]]
-    created_at: datetime.datetime = datetime.datetime.now()
+    created_at: datetime = datetime.now()
 
 class HashedUser(Document):
     hask_pk: str

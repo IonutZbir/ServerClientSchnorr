@@ -61,6 +61,9 @@ def generate_token(token_length: int, pk: str, device_name: str) -> str:
 
 async def safe_close(ctx: ConnContext):
     try:
+        if not ctx.is_session_empty:
+            await UserService.update_user_login(ctx.session.logged_pk, False)
+            ctx.clear_session()
         await ctx.close()
         logger.info(f"[SERVER] Connessione chiusa con il client {ctx.addr}")
     except Exception as e:
@@ -179,8 +182,6 @@ class Server:
 
         user = await UserService.get_user(pk_hash)
 
-        if DEBUG:
-            logger.debug(f"[SERVER] user: {user.model_dump()}")
 
         if not user:
             await self.ctx.send(
@@ -189,6 +190,9 @@ class Server:
             if DEBUG:
                 logger.debug(f"[SERVER] Autenticazione fallita: username '{username}' non trovato")
             return
+        
+        if DEBUG:
+            logger.debug(f"[SERVER] user: {user.model_dump()}")
 
         try:
             temp_pk = int(temp_pk_hex, 16)
@@ -451,6 +455,7 @@ class Server:
                 else:
                     logger.info(f"[SERVER] Tipo messaggio sconosciuto: {msg_type.log_message}")
         except Exception as e:
+            await safe_close(self.ctx)
             logger.error(f"[SERVER] Errore nella coroutine per {self.ctx.addr}: {e}")
         finally:
             if not self.ctx._closed:
