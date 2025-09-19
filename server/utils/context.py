@@ -1,6 +1,6 @@
 import asyncio
 
-import datetime
+from datetime import datetime
 
 from typing import Optional, Any, Dict
 
@@ -10,14 +10,16 @@ from dataclasses import dataclass
 
 from models import User
 
+# TODO: rewrite
 
 @dataclass
 class SessionData:
     user: User = None
     logged_pk = None
-    login_time: datetime.datetime = None
+    login_time: datetime = None
     temp_pk: Optional[int] = None
     challenge: Optional[int] = None
+    hash_pk: str = None
 
     def is_authenticated(self) -> bool:
         return self.user is not None
@@ -26,7 +28,7 @@ class SessionData:
 class ConnContext:
     MESSAGE_LENGTH = 4096
 
-    def __init__(self, reader: asyncio.StreamReader , writer: asyncio.StreamWriter):
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.reader = reader
         self.writer = writer
         self.addr = self.writer.get_extra_info("peername")
@@ -44,7 +46,7 @@ class ConnContext:
             self._closed = True
         except Exception as e:
             raise e
-            
+
     def update_session(self, **kwargs):
         for key, value in kwargs.items():
             if hasattr(self.session, key):
@@ -61,7 +63,7 @@ class ConnContext:
     def is_session_empty(self) -> bool:
         return not self.session.is_authenticated()
 
-    async def send(self, message: Message | Error) -> bool: # TODO: rilanciare l'eccezione
+    async def send(self, message: Message | Error) -> bool:  # TODO: rilanciare l'eccezione
         """Invia un messaggio JSON al client."""
         if self._closed:
             print(f"[SERVER] Tentativo di invio a {self.addr}, ma connessione già chiusa.")

@@ -2,12 +2,12 @@ import asyncio
 import hashlib
 import json
 import os
-import socket
 import sys
-import threading
-import datetime
+from datetime import datetime
 from pathlib import Path
 from asyncio import transports
+
+from services.pairing_services import PairingServices
 
 # Ensure project root is in sys.path for internal imports
 project_root = Path(__file__).resolve().parent.parent
@@ -22,7 +22,7 @@ from common.logger import Logger
 from utils.context import ConnContext
 
 # from temp_token import *
-from models import User, HashedUser, PublicKey
+from models import Pairing, User, HashedUser, PublicKey
 
 from services.user_services import UserService
 from services.public_key_services import PublicKeyServices
@@ -37,26 +37,19 @@ active_connections = {}
 connections_lock = asyncio.Lock()
 
 
-async def register_connection(identifier: str, ctx: ConnContext):
-    with connections_lock:
-        active_connections[identifier] = ctx
+async def register_connection(pairing: Pairing, ctx: ConnContext):
+    async with connections_lock:
+        active_connections[pairing.id] = ctx
 
 
-async def get_connection(identifier) -> ConnContext:
-    with connections_lock:
-        return active_connections.get(identifier)
+async def get_connection(pairing: Pairing,) -> ConnContext:
+    async with connections_lock:
+        return active_connections.get(pairing.id)
 
 
-async def remove_connection(identifier):
-    with connections_lock:
-        active_connections.pop(identifier, None)
-
-
-def generate_token(token_length: int, pk: str, device_name: str) -> str:
-    nonce = os.urandom(16).hex()
-    token_raw = f"{pk}{device_name or ''}{nonce}"
-    token = hashlib.sha256(token_raw.encode()).hexdigest()[:token_length]
-    return token
+async def remove_connection(pairing: Pairing,):
+    async with connections_lock:
+        active_connections.pop(pairing.id, None)
 
 
 async def safe_close(ctx: ConnContext):
@@ -104,6 +97,7 @@ class Server:
                 await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
                 if DEBUG:
                     logger.error(f"[SERVER] Errore di validazione: {e}")
+                await safe_close(self.ctx)
                 return
 
             data = msg.payload
@@ -128,6 +122,7 @@ class Server:
             await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
             if DEBUG:
                 logger.error(f"[SERVER] Errore di validazione: {e}")
+            await safe_close(self.ctx)
             return
 
         data = msg.payload
@@ -145,6 +140,7 @@ class Server:
             await self.ctx.send(Error(msg_type=ErrorType.USERNAME_ALREADY_EXISTS))
             if DEBUG:
                 logger.debug(f"[SERVER] Registrazione fallita: username '{username}' già esistente")
+            await safe_close(self.ctx)
             return
 
         pk = await PublicKeyServices.create_public_key(
@@ -153,7 +149,7 @@ class Server:
 
         user = await UserService.create_user(username=username, pk=pk)
 
-        self.ctx.update_session(user=user, logged_pk=pk, login_time=datetime.datetime.now())
+        self.ctx.update_session(user=user, logged_pk=pk, login_time=datetime.now(), hash_pk=pk_hash)
 
         await self.ctx.send(
             Message(msg_type=MessageType.REGISTERED, payload={"username": username})
@@ -165,13 +161,14 @@ class Server:
         return
 
     async def handle_auth_request(self, msg: Message):
-        
+
         try:
             msg.validate_message({"username": str, "public_key_temp": str, "pk_hash": str})
         except ValidationError as e:
             await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
             if DEBUG:
                 logger.error(f"[SERVER] Errore di validazione {e}")
+            await safe_close(self.ctx)
             return
 
         data = msg.payload
@@ -182,15 +179,15 @@ class Server:
 
         user = await UserService.get_user(pk_hash)
 
-
         if not user:
             await self.ctx.send(
                 Message(msg_type=MessageType.AUTH_REJECTED, payload={"challenge": ""})
             )
             if DEBUG:
                 logger.debug(f"[SERVER] Autenticazione fallita: username '{username}' non trovato")
+            await safe_close(self.ctx)
             return
-        
+
         if DEBUG:
             logger.debug(f"[SERVER] user: {user.model_dump()}")
 
@@ -199,12 +196,13 @@ class Server:
             self.schnorr_verifier.public_key_temp = temp_pk
         except (ValueError, TypeError) as e:
             logger.error(f"[SERVER]: Errore di conversione: {e}")
-            self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
+            await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
+            await safe_close(self.ctx)
             return
 
         challenge = self.schnorr_verifier.challenge  # Genera la challenge (int)
 
-        self.ctx.update_session(temp_pk=temp_pk, user=user, challenge=challenge)
+        self.ctx.update_session(temp_pk=temp_pk, user=user, challenge=challenge, hash_pk = pk_hash)
 
         await self.ctx.send(
             Message(msg_type=MessageType.AUTH_CHALLENGE, payload={"challenge": hex(challenge)})
@@ -219,6 +217,7 @@ class Server:
             if DEBUG:
                 logger.error("[SERVER] Risposta di autenticazione senza sessione attiva")
             await self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
+            await safe_close(self.ctx)
             return
 
         try:
@@ -227,6 +226,7 @@ class Server:
             await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
             if DEBUG:
                 logger.error(f"[SERVER] Errore di validazione {e}")
+            await safe_close(self.ctx)
             return
 
         data = msg.payload
@@ -238,6 +238,7 @@ class Server:
         except (ValueError, TypeError):
             logger.error(f"[SERVER]: Errore di conversione: {e}")
             await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
+            await safe_close(self.ctx)
             return
 
         public_keys = self.ctx.session.user.public_keys
@@ -258,7 +259,7 @@ class Server:
                     payload={"username": self.ctx.session.user.username},
                 )
             )
-            self.ctx.update_session(logged_pk=logged_pk, login_time=datetime.datetime.now())
+            self.ctx.update_session(logged_pk=logged_pk, login_time=datetime.now())
             await UserService.update_user_login(logged_pk, True)
 
             if DEBUG:
@@ -273,139 +274,146 @@ class Server:
         return
 
     async def handle_assoc_request(self, msg: Message):
-        token_length = 32
 
         try:
-            msg.validate_message({"pk": str, "device": str})
+            msg.validate_message({"pk": str, "device": str, "hash_pk": str})
         except ValidationError as e:
-            self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
+            await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
             if DEBUG:
                 logger.error(f"[SERVER] Errore di validazione {e}")
+            await safe_close(self.ctx)
             return
 
         data = msg.payload
 
         pk = data["pk"]
         device_name = data["device"]
+        hash_pk_prefix = data["hash_pk"]
 
-        token = generate_token(token_length, pk, device_name)
-        if DEBUG:
-            logger.debug(f"[SERVER] Hashed Token: {token}")
+        hash_pk = hashlib.sha256(str(pk).encode()).hexdigest()
+        pk = await PublicKeyServices.create_public_key(pk, hash_pk, device_name, False)
 
-        self.ctx.send(Message(msg_type=MessageType.ASSOC_SEND_TOKEN, payload={"token": token}))
+        
+        p = await PairingServices.create_pairing(hash_pk_prefix, pk)
 
-        temp_token = TempToken(token, pk, device_name)
-        temp_token.insert_temp_token()
+        await register_connection(p, self.ctx)
+        logger.debug(f"[SERVER] Ricevuto: {data}")
 
-        register_connection(token, self.ctx)
-        if DEBUG:
-            logger.debug(f"[SERVER] Salvata tupla: {token} - {pk[:20]}...")
 
         return
 
-    def handle_assoc_confirm(self, msg: Message):
+    async def handle_assoc_confirm(self, msg: Message):
         try:
-            msg.validate_message({"token": str})
+            msg.validate_message({"public_key_temp": str, "response": str, "message": str})
         except ValidationError as e:
-            self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
+            await self.ctx.send(Error(msg_type=ErrorType.MALFORMED_MESSAGE))
             if DEBUG:
                 logger.error(f"[SERVER] Errore di validazione {e}")
+            await safe_close(self.ctx)
             return
 
         data = msg.payload
 
-        token = data["token"]
-        temp_token = TempToken.find_pk_by_id(token)
+        sign = {"public_key_temp": int(data["public_key_temp"], 16), "response": int(data["response"], 16)}
 
-        if not temp_token:
-            self.ctx.send(Error(msg_type=ErrorType.UNAUTHORIZED_ACTION))
+        result = self.schnorr_verifier.verify_sign(sign, data["message"])
+
+        if not result:
+            await self.ctx.send(Message(msg_type=MessageType.AUTH_REJECTED))
+            if DEBUG:
+                logger.debug("[SERVER] Autenticazione rifiutata")
+
+        pairing = await PairingServices.get_pairing_by_prefix(data["message"])
+        if not pairing:
+            await self.ctx.send(Error(msg_type=ErrorType.UNAUTHORIZED_ACTION))
             if DEBUG:
                 logger.error(f"[SERVER] Errore: {ErrorType.UNAUTHORIZED_ACTION.message()}")
+            await safe_close(self.ctx)
             return
-
-        pk, device_name = temp_token.pk, temp_token.device_name
 
         if not self.ctx.session.is_authenticated():
-            self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
+            await self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
             if DEBUG:
                 logger.error(f"[SERVER] Errore: {ErrorType.SESSION_NOT_FOUND.message()}")
+            await safe_close(self.ctx)
             return
 
-        devices = self.ctx.session.user.devices
-        logged_device = self.ctx.session.logged_device
-
-        for device in devices:
-            if device["device_name"] == logged_device and not device["main_device"]:
-                self.ctx.send(Error(msg_type=ErrorType.NO_MAIN_DEVICE))
-                if DEBUG:
-                    logger.error(f"[SERVER] Errore: {ErrorType.NO_MAIN_DEVICE.message()}")
-                return
-
-        if temp_token.is_expired:
-            self.ctx.send(Error(msg_type=ErrorType.TOKEN_INVALID_OR_EXPIRED))
-            TempToken.delete_one(token)
+        if pairing.is_expired:
+            await self.ctx.send(Error(msg_type=ErrorType.TOKEN_INVALID_OR_EXPIRED))
+            await PairingServices.delete_one(pairing)
             if DEBUG:
                 logger.error(f"[SERVER] Errore: {ErrorType.TOKEN_INVALID_OR_EXPIRED.message()}")
+            await safe_close(self.ctx)
             return
 
-        user = self.ctx.session.user
+        hash_pk = self.ctx.session.hash_pk
+        pk = pairing.pk
+        user = await UserService.add_new_publickey(hash_pk=hash_pk, new_pk=pk)
 
-        user.update_user_with_device(pk, device_name)
-
+        if not user:
+            await self.ctx.send(Error(msg_type=ErrorType.UNKNOWN_ERROR))
+            await PairingServices.delete_one(pairing)
+            if DEBUG:
+                logger.error(f"[SERVER] Errore: {ErrorType.UNKNOWN_ERROR.message()}")
+            await safe_close(self.ctx)
+            return
+        
         self.ctx.update_session(user=user)
 
-        TempToken.delete_one(token)
+        # await pairing.delete()
 
+        await PairingServices.delete_one(pairing)
+        print(f"[SERVER] {'-'*10}")
+        await UserService.update_user_login(pk, True)
+
+        
         # Verifica che il secondo dispositivo non si sia scollegato nel mentre, altrimenti annulla accoppiamento
         # e dal database viene cancellata la coppia tempo_token
 
-        s_ctx = get_connection(token)
-
+        s_ctx = await get_connection(pairing)
+        
         if not s_ctx:
-            self.ctx.send(Error(msg_type=ErrorType.ASSOC_REJECTED))
+            await self.ctx.send(Error(msg_type=ErrorType.ASSOC_REJECTED))
             if DEBUG:
                 logger.debug(f"[SERVER] {ErrorType.message(ErrorType.ASSOC_REJECTED)}")
+            await safe_close(self.ctx)
             return
 
         # Send ACCEPT message to main device
-        self.ctx.send(Message(msg_type=MessageType.AUTH_ACCEPTED))
+        await self.ctx.send(Message(msg_type=MessageType.AUTH_ACCEPTED))
         if DEBUG:
-            logger.debug(
-                f"[SERVER] Dispositivo associato a {user._id}: {device_name} ({pk[:20]}...)"
-            )
+            logger.debug(f"[SERVER] Dispositivo associato a {user.username}: {pk.device_name})")
 
         # Send ACCEPT message to second device
-        # TODO: thread lock?
-        s_ctx.update_session(
-            user=user, logged_device=device_name, login_time=datetime.datetime.now()
-        )
-        s_ctx.send(Message(msg_type=MessageType.AUTH_ACCEPTED, payload={"username": user._id}))
+        s_ctx.update_session(user=user)
+        s_ctx.update_session(logged_pk=pk, login_time=datetime.now())
+        
+        await s_ctx.send(Message(msg_type=MessageType.AUTH_ACCEPTED, payload={"username": user.username}))
 
         return
 
-    def handle_devices_request(self):
+    async def handle_devices_request(self):
         if self.ctx.is_session_empty:
-            self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
+            await self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
             if DEBUG:
                 logger.debug("[SERVER] Richiesta dispositivi senza sessione attiva")
             return
 
         user = self.ctx.session.user
 
-        devices = user.get_user_devices()
+        devices = await UserService.get_devices(user)
 
         devices_info = [
             {
-                "device_name": device["device_name"],
-                "main_device": device.get("main_device"),
-                "logged": device.get("logged"),
+                "device_name": device.device_name,
+                "logged": device.logged,
             }
             for device in devices
         ]
 
-        self.ctx.send(Message(msg_type=MessageType.DEVICE_RES, payload={"devices": devices_info}))
+        await self.ctx.send(Message(msg_type=MessageType.DEVICE_RES, payload={"devices": devices_info}))
         if DEBUG:
-            logger.debug(f"[SERVER] Lista dispositivi inviata a {user._id}")
+            logger.debug(f"[SERVER] Lista dispositivi inviata a {user.username}")
 
         return
 
@@ -418,9 +426,10 @@ class Server:
             if DEBUG:
                 logger.debug("[SERVER] Logout effettuato con successo")
         else:
-            self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
+            await self.ctx.send(Error(msg_type=ErrorType.SESSION_NOT_FOUND))
             if DEBUG:
                 logger.debug(f"[SERVER] Errore: {ErrorType.SESSION_NOT_FOUND.message()}")
+            await safe_close(self.ctx)
         return
 
     # ---------------- client handler ----------------
@@ -446,10 +455,10 @@ class Server:
                     await self.handle_auth_response(msg)
                 elif msg_type == MessageType.ASSOC_REQ:
                     await self.handle_assoc_request(msg)
-                elif msg_type == MessageType.ASSOC_RECV_TOKEN:
-                    self.handle_assoc_confirm(msg)
+                elif msg_type == MessageType.ASSOC_CONFIRM:
+                    await self.handle_assoc_confirm(msg)
                 elif msg_type == MessageType.DEVICE_REQ:
-                    self.handle_devices_request()
+                    await self.handle_devices_request()
                 elif msg_type == MessageType.LOGOUT:
                     await self.handle_logout()
                 else:
@@ -468,7 +477,7 @@ class Server:
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
     db = Database(db_name="SchnorrAuthServer")
-    await db.init([User, PublicKey, HashedUser])
+    await db.init([User, PublicKey, HashedUser, Pairing])
 
     task = asyncio.current_task()
 
@@ -478,24 +487,47 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         logger.debug(f"[SERVER] Task {task.get_name()} gestisce {addr}")
 
     server = Server(reader, writer, db)
-    await server.client_handler() 
+    try:
+        await server.client_handler()
+    except asyncio.CancelledError:
+        # cleanup on forced cancel
+        await safe_close(server.ctx)
+        raise
+    finally:
+        await safe_close(server.ctx)
 
 
 async def main():
     with open("config.json", "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    client_tasks = set()
+
+    async def client_connected(reader, writer):
+        task = asyncio.create_task(handle_client(reader, writer))
+        client_tasks.add(task)
+        task.add_done_callback(client_tasks.discard)
+
     server = await asyncio.start_server(
-        lambda r, w: asyncio.create_task(handle_client(r, w), name="ClientTask"),
+        client_connected,
         config["host"],
         config["port"],
     )
-    
-    logger.info(f"[SERVER] Server in ascolto su {config["host"]}:{config["port"]}")
-    
-    async with server:
-        await server.serve_forever()
 
+    logger.info(f"[SERVER] Server in ascolto su {config['host']}:{config['port']}")
+
+    async with server:
+        try:
+            await server.serve_forever()
+        except asyncio.CancelledError:
+            logger.info("[SERVER] Arresto manuale del server")
+            for t in client_tasks:
+                t.cancel()
+            await asyncio.gather(*client_tasks, return_exceptions=True)
+            raise
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("[SERVER] Arresto manuale del server")

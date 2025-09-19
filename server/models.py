@@ -1,6 +1,8 @@
 from typing import List
 from beanie import Document, Link
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from pydantic import Field
 
 class PublicKey(Document):
     pk: str
@@ -16,6 +18,16 @@ class User(Document):
 class HashedUser(Document):
     hask_pk: str
     user: Link[User]
+
+class Pairing(Document):
+    prefix_hash_pk: str
+    pk: Link[PublicKey]
+    created_at: datetime = Field(default_factory=datetime.now)
+    expiry: datetime = Field(default_factory=lambda: datetime.now() + timedelta(minutes=10))
+    
+    @property
+    def is_expired(self):
+        return datetime.now() > self.expiry
 
     # def add_device(self, dev: Device):
     #     self.devices.append(dev.to_dict())

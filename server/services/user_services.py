@@ -62,3 +62,14 @@ class UserService:
     async def update_user_login(public_key_used: PublicKey, logged: bool):
         public_key_used.logged = logged
         await public_key_used.save()
+
+    async def get_devices(user: User):
+        user = await User.get(user.id)
+        pk_ids = [link.ref.id for link in user.public_keys]
+        public_keys: list[PublicKey] = []
+        for pk_id in pk_ids:
+            pk = await PublicKey.get(pk_id)
+            if pk:
+                public_keys.append(pk)
+
+        return public_keys

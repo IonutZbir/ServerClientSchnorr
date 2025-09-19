@@ -91,6 +91,12 @@ class SchnorrProver(Schnorr):
         challenge = self.compute_challenge(message)
         sign = {"public_key_temp": self._public_key_temp, "response": self.response(challenge)}
         return sign
+    
+    def sign_message_encoded(self, message: str) -> dict[str, int]:
+        sign = self.sign_message(message)
+        
+        return {"public_key_temp": hex(sign["public_key_temp"]), "response": hex(sign["response"])}
+        
 
 class SchnorrVerifier(Schnorr):
     def __init__(self, group_id: GroupType, filename: str = None):

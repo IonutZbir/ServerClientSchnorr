@@ -21,16 +21,15 @@ class MessageType(Enum):
 
     # --- Associazione ---
     ASSOC_REQ = (12, "ASSOC_REQ", "Richiesta abbinamento dispositivo")
-    ASSOC_SEND_TOKEN = (13, "ASSOC_SEND_TOKEN", "Invio token di abbinamento")
-    ASSOC_RECV_TOKEN = (14, "ASSOC_RECV_TOKEN", "Ricezione token di abbinamento")
+    ASSOC_CONFIRM = (13, "ASSOC_CONFIRM", "Invio della firma al server")
 
     # --- Log out ---
-    LOGOUT = (15, "LOGOUT", "Richiesta di logout")
-    LOGGED_OUT = (16, "LOGGED_OUT", "Logout effettuato")
+    LOGOUT = (14, "LOGOUT", "Richiesta di logout")
+    LOGGED_OUT = (15, "LOGGED_OUT", "Logout effettuato")
 
     # --- Richiesta dati ---
-    DEVICE_REQ = (17, "DEVICE_REQ", "Richiesta elenco dispositivi")
-    DEVICE_RES = (18, "DEVICE_RES", "Risposta elenco dispositivi")
+    DEVICE_REQ = (16, "DEVICE_REQ", "Richiesta elenco dispositivi")
+    DEVICE_RES = (17, "DEVICE_RES", "Risposta elenco dispositivi")
 
     def __init__(self, code, label, log_message):
         self.code = code

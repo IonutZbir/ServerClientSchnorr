@@ -15,7 +15,7 @@ sys.path.append(str(project_root))
 from schnorr_protocol import *
 from common.logger import Logger
 
-from utils.utils import get_device_name, create_qr_code, Device
+from utils.utils import get_device_name, create_qr_code, Device, MnemonicHash
 from utils.key_manager import KeyManager
 from utils.client_connection import ClientConnection
 
@@ -234,9 +234,15 @@ class ClientApp:
 
         self.schnorr_prover.gen_keys()
 
+        hash_pk = hashlib.sha256(str(self.schnorr_prover.public_key).encode())
+
+        words = MnemonicHash.hash_to_words(hash_pk.digest())
+
+        first_66bits_hex =  hex(int.from_bytes(hash_pk.digest(), "big") >> (len(hash_pk.digest())*8 - 66))
+
         assoc_req_msg = Message(
             msg_type=MessageType.ASSOC_REQ,
-            payload={"device": device_name, "pk": hex(self.schnorr_prover.public_key)},
+            payload={"device": device_name, "pk": hex(self.schnorr_prover.public_key), "hash_pk": first_66bits_hex},
         )
 
         # Invio della richiesta di associazione
@@ -248,17 +254,8 @@ class ClientApp:
                 f"[CLIENT] Inviata richiesta di associazione del dispositivo: {assoc_req_msg.to_log()}"
             )
 
-        # Primo step: attendere il token da mostrare come QR
-        response = wait_for_response(
-            self.client_conn, {MessageType.ASSOC_SEND_TOKEN}, {"token": str}
-        )
-
-        if response is None:
-            return False
-
-        token = response.payload.get("token")
-        logger.info(f"[CLIENT] Token ricevuto: {token}")
-        create_qr_code(token)
+        logger.info(f"[CLIENT] Parole da inserire dal dispositivo master:\n{", ".join(words)} " )
+        # create_qr_code(first_66bits_hex)
 
         # Secondo step: attendere conferma di associazione
         response = wait_for_response(
@@ -267,22 +264,35 @@ class ClientApp:
         if response is None:
             return False
 
-        logger.info("[CLIENT] Associazione completata, login effettuato!")
-        logger.info(f"[CLIENT] Benvenuto {response.payload.get("username")}!")
-        KeyManager.save_private_key(response.payload.get("username"), self.schnorr_prover.alpha)
+        username = response.payload.get("username")
+
+        self.user.username = username
+        self.user.password = self.password
+        self.user.logged = True
+        KeyManager.save_private_key(username, self.schnorr_prover.alpha, self.password)
+        logger.info(f"[CLIENT] {MessageType.AUTH_ACCEPTED.message()}!")
+        logger.info(f"[CLIENT] Benvenuto {username}!")
         return True
 
     def confirm_assoc(self) -> bool:
-        ans = input("[INPUT] Inserisci codice di abbinamento: ").strip()
+        words = input("[INPUT] Inserisci le parole richieste (word1, word2, ...): ").strip().split(", ")
 
-        assoc_token_msg = Message(msg_type=MessageType.ASSOC_RECV_TOKEN, payload={"token": ans})
+        prefix = MnemonicHash.words_to_hash(words)
+    
+        hex_prefix = hex(int.from_bytes(prefix, "big"))
 
-        if not self._send(assoc_token_msg):
+        # il device master deve inviare la firma
+        
+        sign = self.schnorr_prover.sign_message_encoded(hex_prefix)
+        sign["message"] = hex_prefix
+        assoc_sign_msg = Message(msg_type=MessageType.ASSOC_CONFIRM, payload=sign)
+
+        if not self._send(assoc_sign_msg):
             return False
 
         if DEBUG:
             logger.debug(
-                f"[CLIENT] Inviato token di verifica: {assoc_token_msg.to_log()}"
+                f"[CLIENT] Inviata firma con l'hash: {assoc_sign_msg.to_log()}"
             )
 
         response = wait_for_response(self.client_conn, {MessageType.AUTH_ACCEPTED})
@@ -290,7 +300,7 @@ class ClientApp:
         if response is None:
             return False
 
-        logger.info("[CLIENT] Abbinamento confermato con successo.")
+        logger.info(f"[CLIENT] Abbinamento avvenuto con successo!")
         return True
 
     def show_devices(self) -> bool:
@@ -307,7 +317,7 @@ class ClientApp:
         devices = response.payload["devices"]
         
         for i, dev in enumerate(devices):
-            device = Device(device_name=dev["device_name"], main_device=dev["main_device"], logged=dev["logged"])
+            device = Device(device_name=dev["device_name"], logged=dev["logged"])
             logger.info(f"Dispositivi associati:\n{'-'*20}\n{i+1}. {device}\n{'-'*20}")
         
         return True        
