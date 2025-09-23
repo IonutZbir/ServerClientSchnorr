@@ -175,8 +175,7 @@ class ClientApp:
             return
         # L'utente è registrato
                 
-        pk_hash = hashlib.sha256(str(self.schnorr_prover.public_key).encode()).hexdigest()
-        
+        pk_hash = hashlib.sha256(str(int(self.schnorr_prover.public_key)).encode()).hexdigest()
         public_key_temp = hex(self.schnorr_prover.public_key_temp)
 
         auth_req_msg = Message(
@@ -212,7 +211,7 @@ class ClientApp:
             return False
 
         response = wait_for_response(
-            self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED}
+            self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED}, {"username": str}
         )
 
         if response is None:
@@ -239,11 +238,11 @@ class ClientApp:
         words = MnemonicHash.hash_to_words(hash_pk.digest())
 
         first_66bits_hex =  hex(int.from_bytes(hash_pk.digest(), "big") >> (len(hash_pk.digest())*8 - 66))
-
         assoc_req_msg = Message(
             msg_type=MessageType.ASSOC_REQ,
             payload={"device": device_name, "pk": hex(self.schnorr_prover.public_key), "hash_pk": first_66bits_hex},
         )
+        
 
         # Invio della richiesta di associazione
         if not self._send(assoc_req_msg):
@@ -295,7 +294,11 @@ class ClientApp:
                 f"[CLIENT] Inviata firma con l'hash: {assoc_sign_msg.to_log()}"
             )
 
-        response = wait_for_response(self.client_conn, {MessageType.AUTH_ACCEPTED})
+        response = wait_for_response(self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED})
+
+        if response.msg_type == MessageType.AUTH_REJECTED:
+            logger.info("[CLIENT] Abbinamento annullato!")
+            return False
 
         if response is None:
             return False

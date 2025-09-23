@@ -1,0 +1,1 @@
+quando faccio associa dispositivo, il server rimane in attesa di messaggio

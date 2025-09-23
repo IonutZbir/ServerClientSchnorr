@@ -176,7 +176,7 @@ class Server:
         username = data["username"]
         temp_pk_hex = data["public_key_temp"]
         pk_hash = data["pk_hash"]
-
+        print(temp_pk_hex)
         user = await UserService.get_user(pk_hash)
 
         if not user:
@@ -267,7 +267,7 @@ class Server:
                     f"[SERVER] User {self.ctx.session.user.username} autenticato dal dispositivo {self.ctx.session.logged_pk.device_name}"
                 )
         else:
-            await self.ctx.send(Message(msg_type=MessageType.AUTH_REJECTED))
+            await self.ctx.send(Message(msg_type=MessageType.AUTH_REJECTED,  payload={"username":""}))
             if DEBUG:
                 logger.debug("[SERVER] Autenticazione rifiutata")
 
@@ -289,8 +289,9 @@ class Server:
         pk = data["pk"]
         device_name = data["device"]
         hash_pk_prefix = data["hash_pk"]
+        print(f"RICEVUTO: {hash_pk_prefix}")
 
-        hash_pk = hashlib.sha256(str(pk).encode()).hexdigest()
+        hash_pk = hashlib.sha256(str(int(pk, 16)).encode()).hexdigest()
         pk = await PublicKeyServices.create_public_key(pk, hash_pk, device_name, False)
 
         
@@ -298,7 +299,6 @@ class Server:
 
         await register_connection(p, self.ctx)
         logger.debug(f"[SERVER] Ricevuto: {data}")
-
 
         return
 
@@ -318,11 +318,15 @@ class Server:
 
         result = self.schnorr_verifier.verify_sign(sign, data["message"])
 
+        print(result)
+        
         if not result:
             await self.ctx.send(Message(msg_type=MessageType.AUTH_REJECTED))
             if DEBUG:
                 logger.debug("[SERVER] Autenticazione rifiutata")
+            return
 
+        print(data["message"], type(data["message"]))
         pairing = await PairingServices.get_pairing_by_prefix(data["message"])
         if not pairing:
             await self.ctx.send(Error(msg_type=ErrorType.UNAUTHORIZED_ACTION))
@@ -363,7 +367,6 @@ class Server:
         # await pairing.delete()
 
         await PairingServices.delete_one(pairing)
-        print(f"[SERVER] {'-'*10}")
         await UserService.update_user_login(pk, True)
 
         

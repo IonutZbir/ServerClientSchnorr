@@ -12,7 +12,11 @@ class Schnorr:
         self._p = self._crypto_group.p
         self._g = self._crypto_group.g
         self._q = self._crypto_group.q
-
+        
+        # print("P", self._p)
+        # print("G", self._g)
+        # print("Q", self._q)
+        
         self._public_key = None
         self._public_key_temp = None
 
@@ -48,7 +52,8 @@ class Schnorr:
     def public_key_temp(self, value: int):
         self._public_key_temp = value
 
-    def compute_challenge(self, message: int) -> int:
+    def compute_challenge(self, message: str) -> int:
+        print(f"MESSAGE {message}")
         data = str(self.public_key_temp) + str(self.public_key) + message
         return int(hashlib.sha256(data.encode()).hexdigest(), 16) % self.q
 
@@ -116,6 +121,7 @@ class SchnorrVerifier(Schnorr):
     def verify_sign(self, sign: dict, message: str) -> bool:
         self.public_key_temp = sign["public_key_temp"]
         self._challenge = self.compute_challenge(message)
+        print(f"CHALLENG {self._challenge}")
         return self.check(sign["response"])
 
 # Example of usage

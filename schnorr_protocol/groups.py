@@ -50,7 +50,7 @@ class Rfc3526:
                 group_enum = GroupType(key) 
                 if not isinstance(params, dict) or "p" not in params or "g" not in params:
                     raise ValueError(f"Al gruppo '{key}' mancano i seguenti parametri: 'p'/'g'")
-                groups[group_enum] = {"p": int(params["p"], 16), "g": params["g"]}
+                groups[group_enum] = {"p": int(params["p"], 16), "g": int(params["g"])}
             except ValueError:
                 raise RuntimeError(f"Il gruppo '{key}' non è valido per GroupType")
             except Exception as e:
