@@ -5,3 +5,4 @@ beanie
 motor
 pydantic
 cryptography
+mnemonic
