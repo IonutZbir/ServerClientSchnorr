@@ -8,21 +8,40 @@ from schnorr_protocol import *
 
 from dataclasses import dataclass
 
-from models import User
+from models import Pairing, User
+from schnorr_protocol.exceptions import ConnectionClosed
 
 # TODO: rewrite
 
-@dataclass
+@dataclass(slots=True)
 class SessionData:
-    user: User = None
-    logged_pk = None
-    login_time: datetime = None
-    temp_pk: Optional[int] = None
-    challenge: Optional[int] = None
-    hash_pk: str = None
+    user: Optional[User] = None
+    logged_pk: Optional[int] = None      # Public key of authenticated user
+    login_time: Optional[datetime] = None
+    temp_pk: Optional[int] = None        # Ephemeral PK during handshake
+    challenge: Optional[int] = None      # Current Schnorr challenge
+    hash_pk: Optional[str] = None        # Hash of public key (cache)
 
     def is_authenticated(self) -> bool:
         return self.user is not None
+
+    def copy(self) -> Dict[str, Any]:
+        return {
+            "user": self.user,
+            "logged_pk": self.logged_pk,
+            "login_time": self.login_time,
+            "temp_pk": self.temp_pk,
+            "challenge": self.challenge,
+            "hash_pk": self.hash_pk,
+        }
+
+    def reset(self) -> None:
+        self.user = None
+        self.logged_pk = None
+        self.login_time = None
+        self.temp_pk = None
+        self.challenge = None
+        self.hash_pk = None
 
 
 class ConnContext:
@@ -36,16 +55,12 @@ class ConnContext:
         self._closed = False
 
     async def close(self) -> None:
-        """Chiude la connessione e pulisce i dati di sessione."""
         if self._closed:
-            return
-        try:
-            self.writer.close()
-            await self.writer.wait_closed()
-            self.clear_session()
-            self._closed = True
-        except Exception as e:
-            raise e
+            raise ConnectionClosed()
+        self.writer.close()
+        await self.writer.wait_closed()
+        self.clear_session()
+        self._closed = True
 
     def update_session(self, **kwargs):
         for key, value in kwargs.items():
@@ -53,40 +68,44 @@ class ConnContext:
                 setattr(self.session, key, value)
 
     def get_session_data(self) -> Dict[str, Any]:
-        """Restituisce una copia dei dati di sessione."""
         return self.session.copy()
 
     def clear_session(self):
-        self.session = SessionData()  # reset
+        self.session.reset()
 
     @property
     def is_session_empty(self) -> bool:
         return not self.session.is_authenticated()
 
-    async def send(self, message: Message | Error) -> bool:  # TODO: rilanciare l'eccezione
-        """Invia un messaggio JSON al client."""
+    async def send(self, message: str):
         if self._closed:
-            print(f"[SERVER] Tentativo di invio a {self.addr}, ma connessione già chiusa.")
-            return False
-        try:
-            self.writer.write(encode_message(message))
-            await self.writer.drain()
-            return True
-        except (BrokenPipeError, ConnectionResetError):
-            print(f"[SERVER] Errore: connessione chiusa dal client {self.addr} durante l'invio")
-            self.close()
-            return False
+            raise ConnectionClosed()
+        self.writer.write(message)
+        await self.writer.drain()
 
-    async def receive(self) -> Message | Error | None:
-        """Riceve un messaggio JSON dal client."""
+    async def receive(self) -> str:
         if self._closed:
-            return None
-        try:
-            data = await self.reader.read(self.MESSAGE_LENGTH)
-            if not data:
-                await self.close()
-                return None
-            return decode_message(data.decode())
-        except ConnectionResetError:
-            self.close()
-            return None
+            raise ConnectionClosed()
+        data = await self.reader.read(self.MESSAGE_LENGTH)
+        if not data:
+            raise UnsupportedMessageTypeError("Dati non ricevuti")
+        return data.decode()
+
+class GlobalSessionPairing:
+    _active_connections: Dict[int, ConnContext] = {}
+    _lock = asyncio.Lock()
+
+    @classmethod
+    async def register_connection(cls, pairing: Pairing, ctx: ConnContext) -> None:
+        async with cls._lock:
+            cls._active_connections[pairing.id] = ctx
+
+    @classmethod
+    async def get_connection(cls, pairing: Pairing) -> Optional[ConnContext]:
+        async with cls._lock:
+            return cls._active_connections.get(pairing.id)
+
+    @classmethod
+    async def remove_connection(cls, pairing: Pairing) -> None:
+        async with cls._lock:
+            cls._active_connections.pop(pairing.id, None)

@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
 import cryptography.exceptions
 
+
 class KeyManager:
     HOME_PATH = Path.home()
     SCHNORR_DIR = HOME_PATH / ".schnorr"

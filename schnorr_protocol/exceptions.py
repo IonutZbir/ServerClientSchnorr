@@ -3,53 +3,61 @@ from .errors import ErrorType
 
 class ValidationError(Exception):
     """Messaggio ricevuto non valido o con campi mancanti."""
-    pass
+    def __init__(self, message: str = "Messaggio non valido o con campi mancanti."):
+        super().__init__(message)
 
 
 class UnsupportedMessageTypeError(Exception):
     """Tipo di messaggio non riconosciuto dal server."""
-    pass
+    def __init__(self, message: str = "Tipo di messaggio non riconosciuto dal server."):
+        super().__init__(message)
 
 
 class AuthenticationError(Exception):
     """Autenticazione fallita (credenziali errate o assenti)."""
-    pass
+    def __init__(self, message: str = "Autenticazione fallita: credenziali errate o assenti."):
+        super().__init__(message)
 
 
 class AuthorizationError(Exception):
     """Accesso negato: permessi insufficienti per l'operazione."""
-    pass
+    def __init__(self, message: str = "Accesso negato: permessi insufficienti."):
+        super().__init__(message)
 
 
 class TokenExpiredError(Exception):
     """Il token è scaduto."""
-    pass
+    def __init__(self, message: str = "Il token è scaduto."):
+        super().__init__(message)
 
 
 class TokenNotFoundError(Exception):
     """Token non trovato nel database."""
-    pass
+    def __init__(self, message: str = "Token non trovato nel database."):
+        super().__init__(message)
 
 
 class ProtocolError(Exception):
     """Violazione del protocollo o sequenza di messaggi non valida."""
-    pass
+    def __init__(self, message: str = "Violazione del protocollo o sequenza di messaggi non valida."):
+        super().__init__(message)
 
 
 class ConnectionClosedError(Exception):
     """Connessione chiusa inaspettatamente dal client."""
-    pass
+    def __init__(self, message: str = "Connessione chiusa inaspettatamente dal client."):
+        super().__init__(message)
+
+
+class ConnectionClosed(Exception):
+    """Connessione chiusa tra client e server."""
+    def __init__(self, message: str = "Connessione chiusa tra client e server."):
+        super().__init__(message)
 
 
 def exception_to_error_type(exc: Exception) -> ErrorType:
     """
     Mappa un'eccezione personalizzata a un ErrorType definito nel protocollo.
-
-    Args:
-        exc (Exception): L'eccezione sollevata.
-
-    Returns:
-        ErrorType: Il corrispondente ErrorType da inviare al client.
     """
     if isinstance(exc, ValidationError):
         return ErrorType.MALFORMED_MESSAGE
@@ -70,4 +78,3 @@ def exception_to_error_type(exc: Exception) -> ErrorType:
 
     # Default
     return ErrorType.UNKNOWN_ERROR
-
