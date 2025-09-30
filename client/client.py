@@ -19,6 +19,8 @@ from utils.utils import get_device_name, create_qr_code, Device, MnemonicHash
 from utils.key_manager import KeyManager
 from utils.client_connection import ClientConnection
 
+from Crypto.Hash import RIPEMD160
+
 DEBUG = False
 
 logger = Logger()
@@ -235,15 +237,19 @@ class ClientApp:
 
         hash_pk = hashlib.sha256(str(self.schnorr_prover.public_key).encode())
 
-        words = MnemonicHash.hash_to_words(hash_pk.digest())
+        ripemd160_pk = RIPEMD160.new()
 
-        first_66bits_hex =  hex(int.from_bytes(hash_pk.digest(), "big") >> (len(hash_pk.digest())*8 - 66))
+        ripemd160_pk.update(hash_pk.digest())
+
+        digest_bits_size = ripemd160_pk.digest_size * 8
+
+        words = MnemonicHash.hash_to_words(ripemd160_pk.digest(), num_bits=digest_bits_size)
+
         assoc_req_msg = Message(
             msg_type=MessageType.ASSOC_REQ,
-            payload={"device": device_name, "pk": hex(self.schnorr_prover.public_key), "hash_pk": first_66bits_hex},
+            payload={"device": device_name, "pk": hex(self.schnorr_prover.public_key)},
         )
         
-
         # Invio della richiesta di associazione
         if not self._send(assoc_req_msg):
             return False
@@ -254,7 +260,7 @@ class ClientApp:
             )
 
         logger.info(f"[CLIENT] Parole da inserire dal dispositivo master:\n{", ".join(words)} " )
-        # create_qr_code(first_66bits_hex)
+        # create_qr_code(ripemd160_pk.hexdigest())
 
         # Secondo step: attendere conferma di associazione
         response = wait_for_response(
@@ -276,7 +282,7 @@ class ClientApp:
     def confirm_assoc(self) -> bool:
         words = input("[INPUT] Inserisci le parole richieste (word1, word2, ...): ").strip().split(", ")
 
-        prefix = MnemonicHash.words_to_hash(words)
+        prefix = MnemonicHash.words_to_hash(words, num_bits=160)
     
         hex_prefix = hex(int.from_bytes(prefix, "big"))
 
@@ -296,11 +302,11 @@ class ClientApp:
 
         response = wait_for_response(self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED})
 
+        if response is None:
+            return False
+        
         if response.msg_type == MessageType.AUTH_REJECTED:
             logger.info("[CLIENT] Abbinamento annullato!")
-            return False
-
-        if response is None:
             return False
 
         logger.info(f"[CLIENT] Abbinamento avvenuto con successo!")

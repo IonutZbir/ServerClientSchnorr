@@ -53,7 +53,6 @@ class Schnorr:
         self._public_key_temp = value
 
     def compute_challenge(self, message: str) -> int:
-        print(f"MESSAGE {message}")
         data = str(self.public_key_temp) + str(self.public_key) + message
         return int(hashlib.sha256(data.encode()).hexdigest(), 16) % self.q
 
@@ -121,7 +120,6 @@ class SchnorrVerifier(Schnorr):
     def verify_sign(self, sign: dict, message: str) -> bool:
         self.public_key_temp = sign["public_key_temp"]
         self._challenge = self.compute_challenge(message)
-        print(f"CHALLENG {self._challenge}")
         return self.check(sign["response"])
 
 # Example of usage

@@ -54,67 +54,73 @@ class MnemonicHash:
     wordlist = mnemo.wordlist
 
     @classmethod
-    def hash_to_words(cls, digest: bytes, num_bits: int = 66) -> list[str]:
+    def hash_to_words(cls, digest: bytes, num_bits) -> list[str]:
         """
-        Converte un hash esadecimale in una sequenza di parole BIP-39.
-        Usa i primi `num_bits` dell'hash (MSB).
+        Converte un hash in una sequenza di parole BIP-39.
+        Supporta anche num_bits non multiplo di 11.
+        L'ultima parola in tal caso userà solo i bit disponibili (resto viene azzerato).
         """
-        
-        if num_bits % 11 != 0:
-            raise ValueError("num_bits deve essere multiplo di 11 per avere parole intere.")
-
-        # converte bytes -> intero (MSB first)
         digest_int = int.from_bytes(digest, byteorder="big")
         total_bits = len(digest) * 8
         if num_bits > total_bits:
             raise ValueError("num_bits maggiore del numero di bit del digest fornito.")
 
-        # prendi i primi (più significativi) num_bits
         prefix_int = digest_int >> (total_bits - num_bits)
 
-        # dividi in blocchi da 11 bit (dall'MSB al LSB)
         words = []
-        for i in range(num_bits // 11):
+        full_words = num_bits // 11
+        remaining_bits = num_bits % 11
+
+        # parole intere
+        for i in range(full_words):
             shift = num_bits - 11 * (i + 1)
-            idx = (prefix_int >> shift) & ((1 << 11) - 1) 
+            idx = (prefix_int >> shift) & ((1 << 11) - 1)
+            words.append(cls.wordlist[idx])
+
+        # ultima parola parziale (se avanzano bit)
+        if remaining_bits > 0:
+            idx = prefix_int & ((1 << remaining_bits) - 1)
+            # shift per portare nei bit alti della parola
+            idx <<= (11 - remaining_bits)
             words.append(cls.wordlist[idx])
 
         return words
-    
-    @classmethod
-    def words_to_hash(cls, words: list[str], num_bits: int = 66) -> bytes:
-        """
-        Dalle parole ricava i primi num_bits come bytes. Restituisce ceil(num_bits/8) bytes;
-        l'ultimo byte avrà eventuali bit di padding in LSB a 0.
-        """
 
-        if num_bits % 11 != 0:
-            raise ValueError("num_bits deve essere multiplo di 11.")
-        if len(words) != num_bits // 11:
-            raise ValueError(f"Numero parole non corretto: attese {num_bits//11}.")
+    @classmethod
+    def words_to_hash(cls, words: list[str], num_bits) -> bytes:
+        """
+        Ricostruisce i primi num_bits come bytes dai mnemonici.
+        Supporta anche num_bits non multiplo di 11.
+        """
+        full_words = num_bits // 11
+        remaining_bits = num_bits % 11
+
+        attese = full_words + (1 if remaining_bits > 0 else 0)
+        if len(words) != attese:
+            raise ValueError(f"Numero parole non corretto: attese {attese}.")
 
         prefix_int = 0
-        for w in words:
+
+        for i, w in enumerate(words):
             try:
                 idx = cls.wordlist.index(w)
             except ValueError:
                 raise ValueError(f"Parola non valida: {w}")
-            prefix_int = (prefix_int << 11) | idx
 
-        # ora prefix_int contiene esattamente num_bits significativi (MSB aligned)
-        num_bytes = (num_bits + 7) // 8  # ceil(num_bits/8)
-        
-        # converti a bytes, left-pad per ottenere num_bytes (big-endian)
-        prefix_bytes = prefix_int.to_bytes(num_bytes, byteorder="big")
+            if i < full_words:
+                prefix_int = (prefix_int << 11) | idx
+            else:
+                # parola parziale → usa solo i bit più significativi
+                idx >>= (11 - remaining_bits)
+                prefix_int = (prefix_int << remaining_bits) | idx
 
-        # Nota: gli ultimi (8*num_bytes - num_bits) bit sono padding a 0 nel LSB dell'ultimo byte
-        return prefix_bytes
+        num_bytes = (num_bits + 7) // 8
+        return prefix_int.to_bytes(num_bytes, byteorder="big")
 
     @classmethod
     def verify_words_against_digest_bytes(cls, words: list[str], digest: bytes, num_bits: int = 66) -> bool:
         """
-        Verifica che le parole corrispondano ai primi `num_bits` di `digest` (bytes).
-        Confronto fatto su interi per precisione.
+        Verifica che le parole corrispondano ai primi `num_bits` di `digest`.
         """
         digest_int = int.from_bytes(digest, byteorder="big")
         total_bits = len(digest) * 8
@@ -124,10 +130,8 @@ class MnemonicHash:
         expected_prefix_int = digest_int >> (total_bits - num_bits)
 
         # ricava prefix_int dalle parole
-        prefix_int = 0
-        for w in words:
-            idx = cls.wordlist.index(w)
-            prefix_int = (prefix_int << 11) | idx
+        prefix_bytes = cls.words_to_hash(words, num_bits)
+        prefix_int = int.from_bytes(prefix_bytes, byteorder="big")
 
         return prefix_int == expected_prefix_int
 
