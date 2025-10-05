@@ -8,19 +8,18 @@ from schnorr_protocol import *
 
 from dataclasses import dataclass
 
-from models import Pairing, User
-from schnorr_protocol.exceptions import ConnectionClosed
+from models import Pairing, PublicKey, User
+from schnorr_protocol.exceptions import ConnectionAlreadyClosed
 
 # TODO: rewrite
 
 @dataclass(slots=True)
 class SessionData:
     user: Optional[User] = None
-    logged_pk: Optional[int] = None      # Public key of authenticated user
+    logged_pk: Optional[PublicKey] = None      # Public key of authenticated user
     login_time: Optional[datetime] = None
     temp_pk: Optional[int] = None        # Ephemeral PK during handshake
     challenge: Optional[int] = None      # Current Schnorr challenge
-    hash_pk: Optional[str] = None        # Hash of public key (cache)
 
     def is_authenticated(self) -> bool:
         return self.user is not None
@@ -32,7 +31,6 @@ class SessionData:
             "login_time": self.login_time,
             "temp_pk": self.temp_pk,
             "challenge": self.challenge,
-            "hash_pk": self.hash_pk,
         }
 
     def reset(self) -> None:
@@ -41,7 +39,6 @@ class SessionData:
         self.login_time = None
         self.temp_pk = None
         self.challenge = None
-        self.hash_pk = None
 
 
 class ConnContext:
@@ -56,7 +53,7 @@ class ConnContext:
 
     async def close(self) -> None:
         if self._closed:
-            raise ConnectionClosed()
+            raise ConnectionAlreadyClosed()
         self.writer.close()
         await self.writer.wait_closed()
         self.clear_session()
@@ -79,16 +76,14 @@ class ConnContext:
 
     async def send(self, message: str):
         if self._closed:
-            raise ConnectionClosed()
+            raise ConnectionAlreadyClosed()
         self.writer.write(message)
         await self.writer.drain()
 
     async def receive(self) -> str:
         if self._closed:
-            raise ConnectionClosed()
+            raise ConnectionAlreadyClosed()
         data = await self.reader.read(self.MESSAGE_LENGTH)
-        if not data:
-            raise UnsupportedMessageTypeError("Dati non ricevuti")
         return data.decode()
 
 class GlobalSessionPairing:

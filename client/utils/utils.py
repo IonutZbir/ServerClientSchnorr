@@ -54,52 +54,48 @@ class MnemonicHash:
     wordlist = mnemo.wordlist
 
     @classmethod
-    def hash_to_words(cls, digest: bytes, num_bits) -> list[str]:
+    def hash_to_words(cls, digest: bytes) -> list[str]:
         """
-        Converte un hash in una sequenza di parole BIP-39.
-        Supporta anche num_bits non multiplo di 11.
-        L'ultima parola in tal caso userà solo i bit disponibili (resto viene azzerato).
+        Converte tutto il digest in una sequenza di parole BIP-39.
+        Usa tutti i bit disponibili, anche se non multiplo di 11.
+        L'ultima parola userà solo i bit disponibili (resto viene azzerato).
         """
         digest_int = int.from_bytes(digest, byteorder="big")
         total_bits = len(digest) * 8
-        if num_bits > total_bits:
-            raise ValueError("num_bits maggiore del numero di bit del digest fornito.")
-
-        prefix_int = digest_int >> (total_bits - num_bits)
 
         words = []
-        full_words = num_bits // 11
-        remaining_bits = num_bits % 11
+        full_words = total_bits // 11
+        remaining_bits = total_bits % 11
 
         # parole intere
         for i in range(full_words):
-            shift = num_bits - 11 * (i + 1)
-            idx = (prefix_int >> shift) & ((1 << 11) - 1)
+            shift = total_bits - 11 * (i + 1)
+            idx = (digest_int >> shift) & ((1 << 11) - 1)
             words.append(cls.wordlist[idx])
 
         # ultima parola parziale (se avanzano bit)
         if remaining_bits > 0:
-            idx = prefix_int & ((1 << remaining_bits) - 1)
-            # shift per portare nei bit alti della parola
+            idx = digest_int & ((1 << remaining_bits) - 1)
             idx <<= (11 - remaining_bits)
             words.append(cls.wordlist[idx])
 
         return words
 
     @classmethod
-    def words_to_hash(cls, words: list[str], num_bits) -> bytes:
+    def words_to_hash(cls, words: list[str], digest_len_bytes: int) -> bytes:
         """
-        Ricostruisce i primi num_bits come bytes dai mnemonici.
-        Supporta anche num_bits non multiplo di 11.
+        Ricostruisce tutti i bit come bytes dai mnemonici.
+        digest_len_bytes: numero di byte atteso nel digest originale.
         """
-        full_words = num_bits // 11
-        remaining_bits = num_bits % 11
+        total_bits = digest_len_bytes * 8
+        full_words = total_bits // 11
+        remaining_bits = total_bits % 11
 
         attese = full_words + (1 if remaining_bits > 0 else 0)
         if len(words) != attese:
             raise ValueError(f"Numero parole non corretto: attese {attese}.")
 
-        prefix_int = 0
+        digest_int = 0
 
         for i, w in enumerate(words):
             try:
@@ -108,32 +104,20 @@ class MnemonicHash:
                 raise ValueError(f"Parola non valida: {w}")
 
             if i < full_words:
-                prefix_int = (prefix_int << 11) | idx
+                digest_int = (digest_int << 11) | idx
             else:
-                # parola parziale → usa solo i bit più significativi
                 idx >>= (11 - remaining_bits)
-                prefix_int = (prefix_int << remaining_bits) | idx
+                digest_int = (digest_int << remaining_bits) | idx
 
-        num_bytes = (num_bits + 7) // 8
-        return prefix_int.to_bytes(num_bytes, byteorder="big")
+        return digest_int.to_bytes(digest_len_bytes, byteorder="big")
 
     @classmethod
-    def verify_words_against_digest_bytes(cls, words: list[str], digest: bytes, num_bits: int = 66) -> bool:
+    def verify_words_against_digest_bytes(cls, words: list[str], digest: bytes) -> bool:
         """
-        Verifica che le parole corrispondano ai primi `num_bits` di `digest`.
+        Verifica che le parole corrispondano a tutti i bit di `digest`.
         """
-        digest_int = int.from_bytes(digest, byteorder="big")
-        total_bits = len(digest) * 8
-        if num_bits > total_bits:
-            return False
-
-        expected_prefix_int = digest_int >> (total_bits - num_bits)
-
-        # ricava prefix_int dalle parole
-        prefix_bytes = cls.words_to_hash(words, num_bits)
-        prefix_int = int.from_bytes(prefix_bytes, byteorder="big")
-
-        return prefix_int == expected_prefix_int
+        digest_bytes = cls.words_to_hash(words, len(digest))
+        return digest_bytes == digest
 
 if __name__ == "__main__":
     digest = hashlib.sha256("ionut".encode()).digest() # slave

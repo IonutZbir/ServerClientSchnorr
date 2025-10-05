@@ -1,5 +1,6 @@
 from .errors import ErrorType
 
+# Ancora non c'è la compatibilità totale con tutte le eccezioni
 
 class ValidationError(Exception):
     """Messaggio ricevuto non valido o con campi mancanti."""
@@ -49,9 +50,9 @@ class ConnectionClosedError(Exception):
         super().__init__(message)
 
 
-class ConnectionClosed(Exception):
+class ConnectionAlreadyClosed(Exception):
     """Connessione chiusa tra client e server."""
-    def __init__(self, message: str = "Connessione chiusa tra client e server."):
+    def __init__(self, message: str = "La connessione è già chiusa tra client e server."):
         super().__init__(message)
 
 

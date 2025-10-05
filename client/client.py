@@ -2,7 +2,6 @@ import argparse
 import socket
 import sys
 from pathlib import Path
-import hashlib
 
 import getpass
 
@@ -14,6 +13,7 @@ sys.path.append(str(project_root))
 
 from schnorr_protocol import *
 from common.logger import Logger
+from common.hash import hash_public_key_SHA256
 
 from utils.utils import get_device_name, create_qr_code, Device, MnemonicHash
 from utils.key_manager import KeyManager
@@ -24,6 +24,7 @@ from Crypto.Hash import RIPEMD160
 DEBUG = False
 
 logger = Logger()
+
 
 class User:
     def __init__(self):
@@ -46,7 +47,7 @@ class User:
     @logged.setter
     def logged(self, value):
         self._logged = value
-    
+
     @property
     def password(self):
         return self._password
@@ -54,6 +55,7 @@ class User:
     @password.setter
     def password(self, value):
         self._password = value
+
 
 class ClientApp:
     def __init__(self, client_conn: ClientConnection):
@@ -80,10 +82,10 @@ class ClientApp:
 
     def _handshake(self) -> bool:
         handshake_msg = Message(msg_type=MessageType.HANDSHAKE_REQ)
-        
+
         if DEBUG:
             logger.debug(f"[CLIENT] Inviata richiesta di handshake")
-        
+
         if not self._send(handshake_msg):
             return False
 
@@ -100,7 +102,7 @@ class ClientApp:
         crypto_groups = set(response.payload["crypto_groups"])
 
         my_crypto_groups = GroupType.get_all_groups_obj()
-        
+
         group_id = None
         for mcg in my_crypto_groups:
             if mcg.group_id in crypto_groups:
@@ -109,7 +111,7 @@ class ClientApp:
 
         if DEBUG:
             logger.debug("[CLIENT] Handshake fase 2 - Response")
-            
+
         if group_id is None:
             if not self._send(Message(msg_type=MessageType.HANDSHAKE_NOK)):
                 return False
@@ -119,7 +121,9 @@ class ClientApp:
 
         self.schnorr_prover = SchnorrProver(group_id)
 
-        if not self._send(Message(msg_type=MessageType.HANDSHAKE_OK, payload={"group_id": group_id.group_id})):
+        if not self._send(
+            Message(msg_type=MessageType.HANDSHAKE_OK, payload={"group_id": group_id.group_id})
+        ):
             return False
 
         return True
@@ -152,7 +156,7 @@ class ClientApp:
 
         logger.info(f"[CLIENT] {MessageType.AUTH_ACCEPTED.message()}")
         logger.info(f"[CLIENT] Benvenuto {username}!")
-        
+
         KeyManager.save_private_key(username, self.schnorr_prover.alpha, self.password)
         self.user.username = username
         self.user.password = self.password
@@ -160,29 +164,35 @@ class ClientApp:
         return True
 
     def auth(self) -> bool:
-        
+
         # 1. L'utente inserisce l'username per l'autenticazione
         # 2. Se in locale non viene trovata la chiave allora manda la richiesta di registrazione
         # 3. Se in locale viene trovata la chiave allora manda al richiesta di autenticazione
-        
+
         username = input("[INPUT] Inserisci uno username per l'autenticazione: ").strip()
         try:
-            self.schnorr_prover.alpha = KeyManager.load_private_key(username, self.password)    
+            self.schnorr_prover.alpha = KeyManager.load_private_key(username, self.password)
         except FileNotFoundError:
             if DEBUG:
-                logger.debug("[CLIENT] Chiave privata dell'utente non trovata, procedo con la registrazione...")
+                logger.debug(
+                    "[CLIENT] Chiave privata dell'utente non trovata, procedo con la registrazione..."
+                )
             return self._register(username)
         except cryptography.exceptions.InvalidTag:
             logger.warning("[CLIENT] Password errata!!")
             return
+
         # L'utente è registrato
-                
-        pk_hash = hashlib.sha256(str(int(self.schnorr_prover.public_key)).encode()).hexdigest()
+        hash_pk = hash_public_key_SHA256(self.schnorr_prover.public_key)
         public_key_temp = hex(self.schnorr_prover.public_key_temp)
 
         auth_req_msg = Message(
             msg_type=MessageType.AUTH_COMMITMENT,
-            payload={"public_key_temp": public_key_temp, "username": username, "pk_hash": pk_hash},
+            payload={
+                "public_key_temp": public_key_temp,
+                "username": username,
+                "hash_pk": hash_pk.hexdigest(),
+            },
         )
 
         if not self._send(auth_req_msg):
@@ -192,7 +202,9 @@ class ClientApp:
             logger.debug(f"[CLIENT] Inviata richiesta di autenticazione: {auth_req_msg.to_log()}")
 
         response = wait_for_response(
-            self.client_conn, {MessageType.AUTH_CHALLENGE,  MessageType.AUTH_REJECTED}, {"challenge": str}
+            self.client_conn,
+            {MessageType.AUTH_CHALLENGE, MessageType.AUTH_REJECTED},
+            {"challenge": str},
         )
         if response is None:
             return False
@@ -213,7 +225,9 @@ class ClientApp:
             return False
 
         response = wait_for_response(
-            self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED}, {"username": str}
+            self.client_conn,
+            {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED},
+            {"username": str},
         )
 
         if response is None:
@@ -235,21 +249,19 @@ class ClientApp:
 
         self.schnorr_prover.gen_keys()
 
-        hash_pk = hashlib.sha256(str(self.schnorr_prover.public_key).encode())
+        hash_pk = hash_public_key_SHA256(self.schnorr_prover.public_key)
 
         ripemd160_pk = RIPEMD160.new()
 
         ripemd160_pk.update(hash_pk.digest())
 
-        digest_bits_size = ripemd160_pk.digest_size * 8
-
-        words = MnemonicHash.hash_to_words(ripemd160_pk.digest(), num_bits=digest_bits_size)
+        words = MnemonicHash.hash_to_words(ripemd160_pk.digest())
 
         assoc_req_msg = Message(
             msg_type=MessageType.ASSOC_REQ,
             payload={"device": device_name, "pk": hex(self.schnorr_prover.public_key)},
         )
-        
+
         # Invio della richiesta di associazione
         if not self._send(assoc_req_msg):
             return False
@@ -259,7 +271,7 @@ class ClientApp:
                 f"[CLIENT] Inviata richiesta di associazione del dispositivo: {assoc_req_msg.to_log()}"
             )
 
-        logger.info(f"[CLIENT] Parole da inserire dal dispositivo master:\n{", ".join(words)} " )
+        logger.info(f"[CLIENT] Parole da inserire dal dispositivo master:\n{", ".join(words)} ")
         # create_qr_code(ripemd160_pk.hexdigest())
 
         # Secondo step: attendere conferma di associazione
@@ -280,14 +292,17 @@ class ClientApp:
         return True
 
     def confirm_assoc(self) -> bool:
-        words = input("[INPUT] Inserisci le parole richieste (word1, word2, ...): ").strip().split(", ")
+        words = (
+            input("[INPUT] Inserisci le parole richieste (word1, word2, ...): ").strip().split(", ")
+        )
 
-        prefix = MnemonicHash.words_to_hash(words, num_bits=160)
-    
+        prefix = MnemonicHash.words_to_hash(words, 20)
+
         hex_prefix = hex(int.from_bytes(prefix, "big"))
 
-        # il device master deve inviare la firma
-        
+        # il device master deve inviare la firma, insieme al messaggio che sta firmando
+        # il messaggio rappresenta l'hash della chiave pubblica con ripemd160
+
         sign = self.schnorr_prover.sign_message_encoded(hex_prefix)
         sign["message"] = hex_prefix
         assoc_sign_msg = Message(msg_type=MessageType.ASSOC_CONFIRM, payload=sign)
@@ -296,15 +311,15 @@ class ClientApp:
             return False
 
         if DEBUG:
-            logger.debug(
-                f"[CLIENT] Inviata firma con l'hash: {assoc_sign_msg.to_log()}"
-            )
+            logger.debug(f"[CLIENT] Inviata firma con l'hash: {assoc_sign_msg.to_log()}")
 
-        response = wait_for_response(self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED})
+        response = wait_for_response(
+            self.client_conn, {MessageType.AUTH_ACCEPTED, MessageType.AUTH_REJECTED}
+        )
 
         if response is None:
             return False
-        
+
         if response.msg_type == MessageType.AUTH_REJECTED:
             logger.info("[CLIENT] Abbinamento annullato!")
             return False
@@ -314,23 +329,22 @@ class ClientApp:
 
     def show_devices(self) -> bool:
         msg_req = Message(msg_type=MessageType.DEVICE_REQ)
-        
+
         if not self._send(msg_req):
             return False
-        
+
         response = wait_for_response(self.client_conn, {MessageType.DEVICE_RES}, {"devices": list})
-        
+
         if response is None:
             return False
-        
+
         devices = response.payload["devices"]
-        
+
         for i, dev in enumerate(devices):
             device = Device(device_name=dev["device_name"], logged=dev["logged"])
             logger.info(f"Dispositivi associati:\n{'-'*20}\n{i+1}. {device}\n{'-'*20}")
-        
-        return True        
-        
+
+        return True
 
     def change_password(self, new_password: str) -> bool:
         try:
@@ -356,9 +370,10 @@ class ClientApp:
             return False
 
         self.user = User()
-        
+
         logger.info("[CLIENT] Logout effettuato con successo.")
         return True
+
 
 def wait_for_response(
     client: ClientConnection, expected_types: set[MessageType], required_fields: dict = None
@@ -461,7 +476,6 @@ def main():
         # Azioni per il menu NON loggato
         def set_password():
             app.password = getpass.getpass("")
-
 
         actions_not_logged = {
             "I": set_password,

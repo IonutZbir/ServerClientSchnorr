@@ -1,5 +1,6 @@
 # Note
 
+- [] rivedere l'hash delle chiavi + salvataggio chiavi: seq di byte o int? 
 - Riscrivere il server e il client, troppo codice ridondante [STASERA]
 - Trovare un modo comune per client e server per inviare e ricevere messaggi
 - [x] rip-mod160 per cifrare la chiave pk, quando si fa l'accoppiamento

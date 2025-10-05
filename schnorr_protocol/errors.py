@@ -11,6 +11,7 @@ class ErrorType(Enum):
     # --- Handshake ---
     UNSUPPORTED_GROUP = (10, "UNSUPPORTED_GROUP", "Gruppo crittografico non supportato")
     HANDSHAKE_FAILED = (11, "HANDSHAKE_FAILED", "Handshake non riuscito")
+    HANDSHAKE_REQUIRED = (12, "HANDSHAKE_REQUIRED", "Handshake richiesto ma non ancora avviato")
 
     # --- Autenticazione ---
     INVALID_RESPONSE = (20, "INVALID_RESPONSE", "Risposta di autenticazione non valida")
@@ -47,6 +48,7 @@ class ErrorType(Enum):
     MALFORMED_MESSAGE = (60, "MALFORMED_MESSAGE", "Messaggio malformato o campi mancanti")
     UNAUTHORIZED_ACTION = (61, "UNAUTHORIZED_ACTION", "Azione non autorizzata")
     UNKNOWN_ERROR = (62, "UNKNOWN_ERROR", "Errore sconosciuto")
+    TIMEOUT = (63, "TIMEOUT", "Operazione fallita per timeout")
 
     def __init__(self, code, label, log_message):
         self.code = code
